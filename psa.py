@@ -34,6 +34,7 @@ from __future__ import annotations
 import argparse
 import json
 import math
+import multiprocessing
 import re
 import sys
 import time
@@ -69,7 +70,7 @@ from PIL import Image, ImageDraw, ImageFont
 
 Image.MAX_IMAGE_PIXELS = None  # astro mosaics exceed PIL's decompression-bomb default
 
-VERSION = "1.0.0"
+VERSION = "1.1.0"
 
 DEFAULT_CACHE = Path.home() / ".cache" / "psa"
 
@@ -573,14 +574,40 @@ def solve(xy: np.ndarray, index_files: list[Path], args, auto_hint=None):
         position_hint = astrometry.PositionHint(
             ra_deg=args.ra, dec_deg=args.dec, radius_deg=args.radius)
 
-    params = dict(
+    base_params = dict(
         sip_order=args.sip_order,
         output_logodds_threshold=math.log(1e9),
-        logodds_callback=lambda logodds: astrometry.Action.STOP,
     )
     if args.sip_order == 0:
-        params["tune_up_logodds_threshold"] = None
+        base_params["tune_up_logodds_threshold"] = None
 
+    if args.timeout > 0:
+        # The engine call is not interruptible in-process, so a hard
+        # deadline requires running it in a worker we can kill.
+        recv, send = multiprocessing.Pipe(duplex=False)
+        proc = multiprocessing.Process(
+            target=_solve_worker,
+            args=(send, index_files, xy.tolist(), size_hint, position_hint,
+                  base_params))
+        proc.start()
+        send.close()
+        if recv.poll(args.timeout):
+            payload = recv.recv()
+            proc.join()
+        else:
+            proc.terminate()
+            proc.join(2)
+            if proc.is_alive():
+                proc.kill()
+                proc.join()
+            sys.exit(f"error: no solution within --timeout {args.timeout:g}s "
+                     "(hints help: --scale-low/--scale-high, --ra/--dec)")
+        if isinstance(payload, dict) and "error" in payload:
+            sys.exit(f"error: solver worker failed: {payload['error']}")
+        return astrometry.Solution.from_json(payload)
+
+    params = dict(base_params,
+                  logodds_callback=lambda logodds: astrometry.Action.STOP)
     solver = astrometry.Solver(index_files)
     return solver.solve(
         stars=xy.tolist(),
@@ -588,6 +615,24 @@ def solve(xy: np.ndarray, index_files: list[Path], args, auto_hint=None):
         position_hint=position_hint,
         solution_parameters=astrometry.SolutionParameters(**params),
     )
+
+
+def _solve_worker(conn, index_files, stars, size_hint, position_hint,
+                  base_params):
+    """Engine run in a child process so --timeout can hard-kill it."""
+    try:
+        params = dict(base_params,
+                      logodds_callback=lambda logodds: astrometry.Action.STOP)
+        solver = astrometry.Solver(index_files)
+        solution = solver.solve(
+            stars=stars,
+            size_hint=size_hint,
+            position_hint=position_hint,
+            solution_parameters=astrometry.SolutionParameters(**params),
+        )
+        conn.send(solution.to_json())
+    except Exception as e:
+        conn.send({"error": f"{type(e).__name__}: {e}"})
 
 
 def wcs_orientation(w: WCS, cx: float, cy: float):
@@ -602,6 +647,24 @@ def wcs_orientation(w: WCS, cx: float, cy: float):
     pixscale = 3600.0 * math.sqrt(abs(np.linalg.det(cd)))
     parity = "neg" if np.linalg.det(cd) > 0 else "pos"  # astronomical convention
     return ra, dec, pixscale, orient, parity
+
+
+def write_new_fits(input_path: Path, gray: np.ndarray, wcs_header,
+                   dest: Path) -> None:
+    """solve-field's .new equivalent: the input image with the WCS embedded.
+
+    FITS input keeps its original data and header (WCS cards merged in);
+    raster input is written as a float32 grayscale FITS.
+    """
+    if input_path.suffix.lower() in FITS_SUFFIXES:
+        with fits.open(input_path) as hdul:
+            hdu = next(h for h in hdul if h.data is not None
+                       and getattr(h.data, "ndim", 0) >= 2)
+            data, header = hdu.data.copy(), hdu.header.copy()
+    else:
+        data, header = gray.astype(np.float32), fits.Header()
+    header.update(wcs_header)
+    fits.PrimaryHDU(data=data, header=header).writeto(dest, overwrite=True)
 
 
 def hms(ra: float) -> str:
@@ -958,6 +1021,12 @@ def build_parser() -> argparse.ArgumentParser:
                    help="index scales, e.g. 11-19 or 8,9,10 (default 11-19)")
     p.add_argument("--sip-order", type=int, default=3,
                    help="SIP distortion order, 0 disables (default 3)")
+    p.add_argument("--timeout", type=float, default=0, metavar="SEC",
+                   help="hard solve deadline; the engine runs in a worker "
+                        "process killed at the deadline (default 0 = none)")
+    p.add_argument("--write-new", action="store_true",
+                   help="also write <name>.new.fits -- the input image with "
+                        "the WCS embedded (like solve-field's .new)")
     p.add_argument("--ra", type=float, help="position hint RA (deg)")
     p.add_argument("--dec", type=float, help="position hint Dec (deg)")
     p.add_argument("--radius", type=float, default=15.0,
@@ -1066,6 +1135,10 @@ def main() -> None:
     hdr["COMMENT"] = f"solved by psa.py {VERSION} (astrometry.net engine)"
     fits.PrimaryHDU(header=hdr).writeto(wcs_file, overwrite=True)
     log(f"  wrote {wcs_file}")
+    if args.write_new:
+        new_file = out_dir / f"{input_path.stem}.new.fits"
+        write_new_fits(input_path, gray, hdr, new_file)
+        log(f"  wrote {new_file}")
 
     counts = {"constellations": 0, "constellation_segments": 0,
               "bright_stars": 0, "bayer_stars": 0, "ngc": 0, "hd": 0}

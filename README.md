@@ -114,6 +114,8 @@ Written to `"<name> Solved/"`:
   overlay-only RGBA image like plot-constellations.
 - `solution.json` — machine-readable summary (center, scale, rotation,
   field size, matched index, annotation counts).
+- `<name>.new.fits` (with `--write-new`) — the input image with the WCS
+  embedded, ready for DS9/Siril/Aladin (solve-field's `.new` equivalent).
 
 ## Annotation layers
 
@@ -146,7 +148,9 @@ field can take many minutes blind — same as solve-field. Supply hints:
 ./psa.py img.jpg --ra 332 --dec 47 --radius 25      # position hint
 ```
 
-`--no-auto-hint` disables metadata hints (true blind solve).
+`--no-auto-hint` disables metadata hints (true blind solve). For
+unattended runs, `--timeout SEC` enforces a hard deadline by running the
+engine in a worker process that is killed at the deadline.
 
 ## Validation (2026-06-11)
 

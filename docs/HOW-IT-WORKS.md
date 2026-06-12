@@ -411,6 +411,10 @@ TAN model. Everything written to `"<name> Solved/"`:
   and annotation counts. Examples:
   [blind solve](samples/solution-cassiopeia.json) ·
   [metadata-hinted solve](samples/solution-pxl-hinted.json).
+- **`<name>.new.fits`** (with `--write-new`) — the input image with the
+  WCS embedded, solve-field's `.new` equivalent: FITS input keeps its
+  original data and header with the WCS cards merged in; raster input is
+  written as float32 grayscale.
 
 ```json
 {
@@ -610,9 +614,10 @@ $ env http_proxy=http://127.0.0.1:9 https_proxy=http://127.0.0.1:9 \
   users need WSL. On 32/64-bit ARM (e.g. Raspberry Pi) it compiles from
   source on install, which works but needs a C toolchain.
 - **Not reproduced from the classic pipeline:** solve-field's auxiliary
-  products (`.axy`, `.corr`, `.rdls`, `.new`, `-indx.xyls`). The `.wcs` +
-  `solution.json` pair covers their practical uses; the `.wcs` remains
-  compatible with any astrometry.net tool that wants to regenerate them.
+  products (`.axy`, `.corr`, `.rdls`, `-indx.xyls`). `--write-new`
+  provides the `.new` equivalent; the `.wcs` + `solution.json` pair covers
+  the rest, and the `.wcs` remains compatible with any astrometry.net tool
+  that wants to regenerate them.
 
 ## 12. References
 
