@@ -11,10 +11,11 @@
 # ///
 """psa.py -- portable plate-solve + annotate.
 
-Self-contained Python port of plate-solve-annotate.sh (solve-field +
-plot-constellations). Solving uses the astrometry.net engine compiled into
-the `astrometry` wheel; index files and annotation catalogs are downloaded
-into a local cache on first use and everything runs offline afterwards.
+Self-contained replacement for the classic local pipeline of a shell
+wrapper around solve-field + plot-constellations. Solving uses the
+astrometry.net engine compiled into the `astrometry` wheel; index files
+and annotation catalogs are downloaded into a local cache on first use
+and everything runs offline afterwards.
 
 Usage:
     psa.py image.fit                  solve + annotate
@@ -22,7 +23,7 @@ Usage:
     psa.py --prefetch --hd            warm the cache for offline use
     psa.py --check                    verify cached catalogs
 
-Outputs (in "<name> Solved/", like the original script):
+Outputs (in "<name> Solved/"):
     <name>.wcs        FITS WCS header of the solution
     annotations.png   annotated image (--transparent for overlay only)
     solution.json     machine-readable solve summary

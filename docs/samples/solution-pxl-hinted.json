@@ -1,0 +1,30 @@
+{
+  "input": "PXL_20250930_042446101.NIGHT.jpg",
+  "image_size": [
+    3024,
+    4032
+  ],
+  "stars_extracted": 1000,
+  "solve_seconds": 1.64,
+  "ra_center_deg": 332.3044610010044,
+  "dec_center_deg": 46.89466301733769,
+  "ra_center_hms": "22:09:13.071",
+  "dec_center_dms": "+46:53:40.787",
+  "pixscale_arcsec": 64.80539865350939,
+  "field_deg": [
+    54.43653486894788,
+    72.58204649193051
+  ],
+  "rotation_deg_E_of_N": 48.42976275225555,
+  "parity": "neg",
+  "index": "index-4118.fits",
+  "logodds": 880.055908203125,
+  "annotations": {
+    "constellations": 7,
+    "constellation_segments": 156,
+    "bright_stars": 23,
+    "bayer_stars": 18,
+    "ngc": 86,
+    "hd": 0
+  }
+}

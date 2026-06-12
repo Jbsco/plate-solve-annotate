@@ -1,0 +1,30 @@
+{
+  "input": "cassiopeia.jpg",
+  "image_size": [
+    12455,
+    8250
+  ],
+  "stars_extracted": 1000,
+  "solve_seconds": 21.63,
+  "ra_center_deg": 15.085295888127721,
+  "dec_center_deg": 56.01890820194139,
+  "ra_center_hms": "01:00:20.471",
+  "dec_center_dms": "+56:01:08.070",
+  "pixscale_arcsec": 3.0001825787657586,
+  "field_deg": [
+    10.379798338479867,
+    6.87541840967153
+  ],
+  "rotation_deg_E_of_N": -90.66119400050592,
+  "parity": "neg",
+  "index": "index-4111.fits",
+  "logodds": 2243.10400390625,
+  "annotations": {
+    "constellations": 1,
+    "constellation_segments": 4,
+    "bright_stars": 4,
+    "bayer_stars": 1,
+    "ngc": 6,
+    "hd": 0
+  }
+}
