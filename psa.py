@@ -77,6 +77,8 @@ URLS = {
     "iau-csn.txt": "https://www.pas.rochester.edu/~emamajek/WGSN/IAU-CSN.txt",
     "openngc.csv": "https://raw.githubusercontent.com/mattiaverga/OpenNGC/master/database_files/NGC.csv",
     "hd.fits": "http://data.astrometry.net/hd.fits",
+    "stars.6.json": "https://raw.githubusercontent.com/ofrohn/d3-celestial/master/data/stars.6.json",
+    "starnames.json": "https://raw.githubusercontent.com/ofrohn/d3-celestial/master/data/starnames.json",
 }
 
 # Index series shipped by data.astrometry.net via the astrometry package.
@@ -226,14 +228,14 @@ def load_constellation_lines(cache: Path):
 
 
 def load_bright_stars(cache: Path):
-    """IAU named stars -> dict arrays (name, bayer-con designation, ra, dec)."""
+    """IAU named stars -> (name, bayer-con designation, ra, dec, hip)."""
     cat = _catdir(cache)
-    npz = cat / "bright-stars.npz"
+    npz = cat / "bright-stars-v2.npz"
     if not npz.exists():
         raw = cat / "iau-csn.txt"
         if not fetch(URLS["iau-csn.txt"], raw, "IAU star names"):
             return None
-        names, desigs, ras, decs = [], [], [], []
+        names, desigs, ras, decs, hips = [], [], [], [], []
         date_re = re.compile(r"^\d{4}-\d{2}-\d{2}$")
         for line in raw.read_text(encoding="utf-8", errors="replace").splitlines():
             if not line.strip() or line.lstrip()[0] in "#$":
@@ -249,14 +251,57 @@ def load_bright_stars(cache: Path):
             name = line[:18].strip()
             greek, con = toks[di - 10], toks[di - 9]
             desig = f"{greek} {con}" if greek != "_" and con != "_" else ""
-            names.append(name); desigs.append(desig); ras.append(ra); decs.append(dec)
+            hip = int(toks[di - 4]) if toks[di - 4].isdigit() else 0
+            names.append(name); desigs.append(desig)
+            ras.append(ra); decs.append(dec); hips.append(hip)
         if len(names) < 100:
             log(f"  warning: IAU-CSN parse looks wrong ({len(names)} stars)")
         np.savez_compressed(npz, name=np.array(names, "U24"),
                             desig=np.array(desigs, "U16"),
-                            ra=np.array(ras, "f8"), dec=np.array(decs, "f8"))
+                            ra=np.array(ras, "f8"), dec=np.array(decs, "f8"),
+                            hip=np.array(hips, "u4"))
     d = np.load(npz)
-    return d["name"], d["desig"], d["ra"], d["dec"]
+    return d["name"], d["desig"], d["ra"], d["dec"], d["hip"]
+
+
+def load_bayer_stars(cache: Path):
+    """Bright stars with Bayer/Flamsteed designations but no IAU proper name.
+
+    Built from d3-celestial stars.6.json (positions, magnitudes, HIP ids)
+    joined with starnames.json (designations). Restores plot-constellations'
+    behavior of labeling stars like "γ Cas" that the IAU list omits.
+    """
+    cat = _catdir(cache)
+    npz = cat / "bayer-stars.npz"
+    if not npz.exists():
+        raw_pos = cat / "stars.6.json"
+        raw_nam = cat / "starnames.json"
+        if not (fetch(URLS["stars.6.json"], raw_pos, "bright star positions")
+                and fetch(URLS["starnames.json"], raw_nam, "star designations")):
+            return None
+        namedb = json.loads(raw_nam.read_text(encoding="utf-8"))
+        labels, ras, decs, mags, hips = [], [], [], [], []
+        for feat in json.loads(raw_pos.read_text(encoding="utf-8"))["features"]:
+            hip = feat.get("id")
+            mag = feat.get("properties", {}).get("mag")
+            if not isinstance(hip, int) or mag is None:
+                continue
+            info = namedb.get(str(hip))
+            if not info:
+                continue
+            con = info.get("c", "")
+            desig = info.get("bayer") or info.get("flam")
+            if not desig or not con:
+                continue
+            lon, lat = feat["geometry"]["coordinates"]
+            labels.append(f"{desig} {con}")
+            ras.append(lon % 360.0); decs.append(lat)
+            mags.append(float(mag)); hips.append(hip)
+        np.savez_compressed(npz, label=np.array(labels, "U12"),
+                            ra=np.array(ras, "f8"), dec=np.array(decs, "f8"),
+                            mag=np.array(mags, "f4"), hip=np.array(hips, "u4"))
+    d = np.load(npz)
+    return d["label"], d["ra"], d["dec"], d["mag"], d["hip"]
 
 
 def _sex2deg(s: str, hours: bool) -> float:
@@ -710,10 +755,12 @@ def annotate(ann: Annotator, cache: Path, ctr_ra: float, ctr_dec: float,
                     counts["constellations"] += 1
 
     # --- named bright stars --------------------------------------------------
+    iau_hips: set[int] = set()
     if not args.no_bright:
         res = load_bright_stars(cache)
         if res:
-            names, desigs, ras, decs = res
+            names, desigs, ras, decs, hips = res
+            iau_hips = {int(h) for h in hips if h}
             m = in_field_mask(ras, decs, ctr_ra, ctr_dec, radius)
             px = world2pix(ann.wcs, ras[m], decs[m])
             r = max(6, ann.lw * 4)
@@ -724,6 +771,23 @@ def annotate(ann: Annotator, cache: Path, ctr_ra: float, ctr_dec: float,
                 label = f"{nm} / {dg}" if dg else str(nm)
                 if ann.text((x + r * 1.3, y - r), label, COLORS["star"]):
                     counts["bright_stars"] += 1
+
+    # --- Bayer/Flamsteed-only bright stars (no IAU proper name) --------------
+    if not args.no_bright and args.bright_mag > 0:
+        res = load_bayer_stars(cache)
+        if res:
+            labels, ras, decs, mags, hips = res
+            keep = (mags <= args.bright_mag) & ~np.isin(hips, list(iau_hips))
+            m = in_field_mask(ras[keep], decs[keep], ctr_ra, ctr_dec, radius)
+            px = world2pix(ann.wcs, ras[keep][m], decs[keep][m])
+            r = max(5, ann.lw * 3)
+            for (x, y), lb in zip(px, labels[keep][m]):
+                if not ann.on_canvas(x, y):
+                    continue
+                ann.circle((x, y), r, COLORS["star"])
+                if ann.text((x + r * 1.3, y - r), str(lb), COLORS["star"],
+                            small=True):
+                    counts["bayer_stars"] += 1
 
     # --- NGC / IC / Messier ---------------------------------------------------
     if not args.no_ngc:
@@ -796,7 +860,7 @@ def check_catalogs(cache: Path, with_hd: bool) -> None:
         ok = False
     res = load_bright_stars(cache)
     if res:
-        names, desigs, ras, decs = res
+        names, desigs, ras, decs, hips = res
         i = list(names).index("Vega") if "Vega" in names else -1
         log(f"  bright stars: {len(names)} named")
         if i >= 0:
@@ -805,6 +869,20 @@ def check_catalogs(cache: Path, with_hd: bool) -> None:
             log(f"    Vega: {desigs[i]} at RA {ras[i]:.4f} Dec {decs[i]:+.4f} "
                 f"(offset {d:.1f} arcsec, expect < 5)")
             ok &= d < 5
+        else:
+            ok = False
+    else:
+        ok = False
+    res = load_bayer_stars(cache)
+    if res:
+        labels, ras, decs, mags, hips = res
+        i = np.where(hips == 4427)[0]  # gamma Cas: bright, no IAU name
+        log(f"  bayer/flamsteed stars: {len(labels)}")
+        if len(i):
+            i = int(i[0])
+            log(f"    HIP 4427 -> '{labels[i]}' mag {mags[i]:.2f} "
+                f"(expect 'γ Cas' ~2.2)")
+            ok &= str(labels[i]) == "γ Cas" and mags[i] < 3.0
         else:
             ok = False
     else:
@@ -901,6 +979,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--ngc-mag", type=float, default=12.0,
                    help="NGC/IC magnitude cutoff; named, Messier, and large "
                         "objects are always kept (default 12)")
+    p.add_argument("--bright-mag", type=float, default=4.0,
+                   help="label Bayer/Flamsteed stars (no IAU name) down to "
+                        "this magnitude; 0 disables (default 4.0)")
     p.add_argument("--no-constellations", action="store_true")
     p.add_argument("--no-bright", action="store_true")
     p.add_argument("--no-ngc", action="store_true")
@@ -929,6 +1010,7 @@ def main() -> None:
         log("Prefetching annotation catalogs ...")
         load_constellation_lines(cache)
         load_bright_stars(cache)
+        load_bayer_stars(cache)
         load_ngc(cache)
         if args.hd:
             load_hd(cache)
@@ -985,7 +1067,7 @@ def main() -> None:
     log(f"  wrote {wcs_file}")
 
     counts = {"constellations": 0, "constellation_segments": 0,
-              "bright_stars": 0, "ngc": 0, "hd": 0}
+              "bright_stars": 0, "bayer_stars": 0, "ngc": 0, "hd": 0}
     if not args.no_annotate:
         log("Step 2: annotating ...")
         ann = Annotator(rgb, sol_wcs, args.transparent,
@@ -993,7 +1075,8 @@ def main() -> None:
         annotate(ann, cache, ra_c, dec_c, pixscale, args, xy, counts)
         ann.img.save(ann_file)
         log(f"  drew {counts['constellations']} constellations, "
-            f"{counts['bright_stars']} named stars, {counts['ngc']} NGC/IC"
+            f"{counts['bright_stars']} named + {counts['bayer_stars']} bayer "
+            f"stars, {counts['ngc']} NGC/IC"
             + (f", {counts['hd']} HD" if args.hd else ""))
         log(f"  wrote {ann_file}")
 

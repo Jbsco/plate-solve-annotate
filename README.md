@@ -53,6 +53,8 @@ Written to `"<name> Solved/"` (same convention as the shell script):
 
 - constellation stick figures + names (`--no-constellations` to disable)
 - IAU named bright stars, labeled `Name / α Con` (`--no-bright`)
+- Bayer/Flamsteed-designated stars without IAU names (e.g. `γ Cas`) down to
+  `--bright-mag` (default 4.0; 0 disables)
 - NGC / IC / Messier objects with extent circles (`--no-ngc`); faint
   anonymous entries are suppressed — kept if mag ≤ `--ngc-mag` (default 12),
   named, Messier, or ≥ 5′ across
