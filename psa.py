@@ -70,7 +70,16 @@ from PIL import Image, ImageDraw, ImageFont
 
 Image.MAX_IMAGE_PIXELS = None  # astro mosaics exceed PIL's decompression-bomb default
 
-VERSION = "1.1.0"
+VERSION = "1.2.0"
+
+# CLI parity vocabulary (solve-field's) -> engine search restriction.
+# Most direct sky images are 'neg'; an odd number of mirrors gives 'pos'.
+PARITY = {"pos": astrometry.Parity.NORMAL, "neg": astrometry.Parity.FLIP,
+          "both": astrometry.Parity.BOTH}
+
+
+class SolveError(RuntimeError):
+    """Per-image failure: bad input, too few stars, no solution, timeout."""
 
 DEFAULT_CACHE = Path.home() / ".cache" / "psa"
 
@@ -134,6 +143,7 @@ COLORS = {
     "star": (255, 255, 255),
     "ngc": (140, 255, 140),
     "hd": (170, 200, 255),
+    "grid": (150, 160, 175),
 }
 
 
@@ -438,7 +448,7 @@ def load_image(path: Path):
             hdu = next((h for h in hdul if h.data is not None
                         and getattr(h.data, "ndim", 0) >= 2), None)
             if hdu is None:
-                sys.exit(f"error: no image data in {path}")
+                raise SolveError(f"no image data in {path}")
             data = np.asarray(hdu.data, dtype=np.float32)
             focal = hdu.header.get("FOCALLEN") or hdul[0].header.get("FOCALLEN")
             pixsz = hdu.header.get("XPIXSZ") or hdul[0].header.get("XPIXSZ")
@@ -576,6 +586,7 @@ def solve(xy: np.ndarray, index_files: list[Path], args, auto_hint=None):
 
     base_params = dict(
         sip_order=args.sip_order,
+        parity=PARITY[args.parity],
         output_logodds_threshold=math.log(1e9),
     )
     if args.sip_order == 0:
@@ -600,10 +611,11 @@ def solve(xy: np.ndarray, index_files: list[Path], args, auto_hint=None):
             if proc.is_alive():
                 proc.kill()
                 proc.join()
-            sys.exit(f"error: no solution within --timeout {args.timeout:g}s "
-                     "(hints help: --scale-low/--scale-high, --ra/--dec)")
+            raise SolveError(
+                f"no solution within --timeout {args.timeout:g}s "
+                "(hints help: --scale-low/--scale-high, --ra/--dec)")
         if isinstance(payload, dict) and "error" in payload:
-            sys.exit(f"error: solver worker failed: {payload['error']}")
+            raise SolveError(f"solver worker failed: {payload['error']}")
         return astrometry.Solution.from_json(payload)
 
     params = dict(base_params,
@@ -665,6 +677,20 @@ def write_new_fits(input_path: Path, gray: np.ndarray, wcs_header,
         data, header = gray.astype(np.float32), fits.Header()
     header.update(wcs_header)
     fits.PrimaryHDU(data=data, header=header).writeto(dest, overwrite=True)
+
+
+def plot_detections(rgb: Image.Image, xy: np.ndarray, dest: Path) -> None:
+    """Extraction diagnostic: mark candidates (top 50 red, rest yellow)."""
+    img = rgb.copy()
+    d = ImageDraw.Draw(img)
+    diag = math.hypot(*img.size)
+    r_top, r_rest = max(8, round(diag / 350)), max(5, round(diag / 600))
+    width = max(2, round(diag / 1800))
+    for i, (x, y) in enumerate(xy):
+        r = r_top if i < 50 else r_rest
+        c = (255, 60, 60) if i < 50 else (255, 220, 60)
+        d.ellipse([x - r, y - r, x + r, y + r], outline=c, width=width)
+    img.save(dest)
 
 
 def hms(ra: float) -> str:
@@ -740,9 +766,10 @@ class Annotator:
     def on_canvas(self, x, y, margin=0.0):
         return -margin <= x < self.W + margin and -margin <= y < self.H + margin
 
-    def line(self, p1, p2, color):
-        self.draw.line([p1, p2], fill=(0, 0, 0), width=self.lw + 2)
-        self.draw.line([p1, p2], fill=color, width=self.lw)
+    def line(self, p1, p2, color, width: int | None = None):
+        w = self.lw if width is None else width
+        self.draw.line([p1, p2], fill=(0, 0, 0), width=w + 2)
+        self.draw.line([p1, p2], fill=color, width=w)
 
     def circle(self, xy, r, color):
         bb = [xy[0] - r, xy[1] - r, xy[0] + r, xy[1] + r]
@@ -783,9 +810,79 @@ def subdivide_segment(ra1, dec1, ra2, dec2, step_deg=2.0):
     return ra, dec
 
 
+def nice_step(span_deg: float, steps, target: float = 7.5) -> float:
+    """Smallest step from `steps` giving at most ~target lines across span."""
+    for s in steps:
+        if span_deg / s <= target:
+            return s
+    return steps[-1]
+
+
+def draw_grid(ann: Annotator, ctr_ra: float, ctr_dec: float,
+              radius_deg: float, counts: dict) -> None:
+    """Labeled RA/Dec graticule, sampled finely so lines follow the
+    projection; spacing chosen from the field size."""
+    span = 2.0 * radius_deg
+    dec_step = nice_step(span, [0.25, 0.5, 1, 2, 5, 10, 15, 30])
+    cosd = max(0.15, math.cos(math.radians(min(89.0, abs(ctr_dec)))))
+    # RA steps land on clean clock values: 2.5 min ... 4 h
+    ra_step = nice_step(span / cosd,
+                        [0.625, 1.25, 2.5, 3.75, 7.5, 15, 30, 60])
+    width = max(1, ann.lw // 2)
+
+    def polyline(ras, decs, label):
+        px = world2pix(ann.wcs, ras, decs)
+        jumps = np.hypot(np.diff(px[:, 0]), np.diff(px[:, 1]))
+        limit = 6.0 * float(np.median(jumps)) + 10.0
+        drew, label_at = False, None
+        for k in range(len(px) - 1):
+            if jumps[k] > limit:  # projection blow-up / wrap artifact
+                continue
+            p1, p2 = px[k], px[k + 1]
+            on1, on2 = ann.on_canvas(*p1, margin=2), ann.on_canvas(*p2, margin=2)
+            if on1 or on2:
+                ann.line(tuple(p1), tuple(p2), COLORS["grid"], width=width)
+                drew = True
+                if label_at is None and on1:
+                    label_at = p1
+        if drew and label_at is not None:
+            lx = min(max(label_at[0] + 5, 4), ann.W - 14 * len(label))
+            ly = min(max(label_at[1] + 5, 4), ann.H - int(ann.font.size * 1.6))
+            ann.text((lx, ly), label, COLORS["grid"], small=True)
+        return drew
+
+    dec_lo = max(-89.0, ctr_dec - radius_deg)
+    dec_hi = min(89.0, ctr_dec + radius_deg)
+    ra_half = min(180.0, radius_deg / cosd)
+
+    d = math.ceil(dec_lo / dec_step) * dec_step
+    while d <= dec_hi + 1e-9:
+        ras = np.arange(ctr_ra - ra_half, ctr_ra + ra_half + ra_step / 16,
+                        ra_step / 16) % 360.0
+        if polyline(ras, np.full_like(ras, d), f"{d:+.4g}\N{DEGREE SIGN}"):
+            counts["grid"] += 1
+        d += dec_step
+
+    r = math.ceil((ctr_ra - ra_half) / ra_step) * ra_step
+    while r <= ctr_ra + ra_half + 1e-9:
+        decs = np.arange(dec_lo, dec_hi + dec_step / 16, dec_step / 16)
+        hours = (r % 360.0) / 15.0
+        h, m = int(hours), int(round((hours - int(hours)) * 60))
+        if m == 60:
+            h, m = (h + 1) % 24, 0
+        label = f"{h}h" if m == 0 else f"{h}h{m:02d}m"
+        if polyline(np.full_like(decs, r % 360.0), decs, label):
+            counts["grid"] += 1
+        r += ra_step
+
+
 def annotate(ann: Annotator, cache: Path, ctr_ra: float, ctr_dec: float,
              pixscale: float, args, detected_xy: np.ndarray, counts: dict):
     radius = math.hypot(ann.W, ann.H) * pixscale / 3600.0 / 2.0 * 1.15
+
+    # --- coordinate grid (under everything else) ----------------------------
+    if args.grid:
+        draw_grid(ann, ctr_ra, ctr_dec, radius, counts)
 
     # --- constellation lines + names ---------------------------------------
     if not args.no_constellations:
@@ -1000,13 +1097,17 @@ def build_parser() -> argparse.ArgumentParser:
                "  psa.py result.fit                 solve + annotate\n"
                "  psa.py vega.jpg --hd              with Henry Draper labels\n"
                "  psa.py --prefetch --hd            warm cache for offline use\n"
-               "  psa.py img.jpg --ra 279 --dec 38 --radius 10   hinted (faster)\n",
+               "  psa.py img.jpg --ra 279 --dec 38 --radius 10   hinted (faster)\n"
+               "  psa.py night/*.fit --timeout 300  batch an imaging session\n"
+               "  psa.py img.jpg --grid --plot-detections   grid + diagnostics\n",
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("image", nargs="?", help="FITS/JPEG/PNG/TIFF image to solve")
+    p.add_argument("images", nargs="*", metavar="image",
+                   help="FITS/JPEG/PNG/TIFF image(s) to solve")
     p.add_argument("--hd", action="store_true",
                    help="annotate Henry Draper catalog stars")
     p.add_argument("--out", metavar="DIR",
-                   help="output directory (default: '<name> Solved' in CWD)")
+                   help="output directory (default: '<name> Solved' in CWD; "
+                        "with multiple images, per-image dirs under DIR)")
     p.add_argument("--cache-dir", type=Path, default=DEFAULT_CACHE,
                    help=f"index/catalog cache (default {DEFAULT_CACHE})")
     p.add_argument("--downsample", type=int, default=2, metavar="N",
@@ -1021,9 +1122,14 @@ def build_parser() -> argparse.ArgumentParser:
                    help="index scales, e.g. 11-19 or 8,9,10 (default 11-19)")
     p.add_argument("--sip-order", type=int, default=3,
                    help="SIP distortion order, 0 disables (default 3)")
+    p.add_argument("--parity", choices=("pos", "neg", "both"), default="both",
+                   help="restrict the matcher's parity search (halves blind-"
+                        "solve work; most direct sky images are 'neg', "
+                        "mirrored optics 'pos'; default: both)")
     p.add_argument("--timeout", type=float, default=0, metavar="SEC",
-                   help="hard solve deadline; the engine runs in a worker "
-                        "process killed at the deadline (default 0 = none)")
+                   help="hard solve deadline per image; the engine runs in a "
+                        "worker process killed at the deadline (default 0 = "
+                        "none)")
     p.add_argument("--write-new", action="store_true",
                    help="also write <name>.new.fits -- the input image with "
                         "the WCS embedded (like solve-field's .new)")
@@ -1055,6 +1161,13 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--no-constellations", action="store_true")
     p.add_argument("--no-bright", action="store_true")
     p.add_argument("--no-ngc", action="store_true")
+    p.add_argument("--grid", action="store_true",
+                   help="draw a labeled RA/Dec coordinate grid, spacing "
+                        "chosen from the field size")
+    p.add_argument("--plot-detections", action="store_true",
+                   help="write detections.png marking extracted stars "
+                        "(top 50 red, rest yellow) before solving -- "
+                        "extraction diagnostic")
     p.add_argument("--no-annotate", action="store_true",
                    help="plate solve only, skip annotation image")
     p.add_argument("--prefetch", action="store_true",
@@ -1087,14 +1200,37 @@ def main() -> None:
         log(f"Cache ready at {cache} -- psa.py now runs offline.")
         return
 
-    if not args.image:
+    if not args.images:
         build_parser().print_help()
         sys.exit(1)
 
-    input_path = Path(args.image)
+    index_files = get_index_files(cache, args.series, parse_scales(args.scales))
+    multi = len(args.images) > 1
+    failures = []
+    for i, image in enumerate(args.images):
+        if multi:
+            log(f"\n[{i + 1}/{len(args.images)}] {image}")
+        try:
+            process_image(Path(image), args, cache, index_files, multi)
+        except SolveError as e:
+            log(f"error: {e}")
+            failures.append(image)
+    if multi:
+        done = len(args.images) - len(failures)
+        log(f"\nBatch complete: {done}/{len(args.images)} solved"
+            + (f" -- failed: {', '.join(failures)}" if failures else ""))
+    sys.exit(1 if failures else 0)
+
+
+def process_image(input_path: Path, args, cache: Path,
+                  index_files: list[Path], multi: bool) -> None:
     if not input_path.exists():
-        sys.exit(f"error: {input_path} not found")
-    out_dir = Path(args.out) if args.out else Path(f"{input_path.stem} Solved")
+        raise SolveError(f"{input_path} not found")
+    if args.out:
+        out_dir = (Path(args.out) / f"{input_path.stem} Solved" if multi
+                   else Path(args.out))
+    else:
+        out_dir = Path(f"{input_path.stem} Solved")
     out_dir.mkdir(parents=True, exist_ok=True)
     wcs_file = out_dir / f"{input_path.stem}.wcs"
     ann_file = out_dir / "annotations.png"
@@ -1109,14 +1245,18 @@ def main() -> None:
     xy = extract_stars(gray, max(1, args.downsample), args.objs, args.threshold)
     log(f"  extracted {len(xy)} sources "
         f"({w}x{h}, downsample {args.downsample})")
+    if args.plot_detections:
+        det_file = out_dir / "detections.png"
+        plot_detections(rgb, xy, det_file)
+        log(f"  wrote {det_file}")
     if len(xy) < 8:
-        sys.exit("error: too few stars detected -- adjust --threshold/--downsample?")
+        raise SolveError("too few stars detected -- "
+                         "adjust --threshold/--downsample?")
 
-    index_files = get_index_files(cache, args.series, parse_scales(args.scales))
     solution = solve(xy, index_files, args, auto_hint)
     if not solution.has_match():
-        sys.exit("error: no solution found (try different --scales/--series, "
-                 "more --objs, or position/scale hints)")
+        raise SolveError("no solution found (try different --scales/--series, "
+                         "more --objs, or position/scale hints)")
     best = solution.best_match()
     sol_wcs = best.astropy_wcs()
     ra_c, dec_c, pixscale, orient, parity = wcs_orientation(
@@ -1141,7 +1281,8 @@ def main() -> None:
         log(f"  wrote {new_file}")
 
     counts = {"constellations": 0, "constellation_segments": 0,
-              "bright_stars": 0, "bayer_stars": 0, "ngc": 0, "hd": 0}
+              "bright_stars": 0, "bayer_stars": 0, "ngc": 0, "hd": 0,
+              "grid": 0}
     if not args.no_annotate:
         log("Step 2: annotating ...")
         ann = Annotator(rgb, sol_wcs, args.transparent,
@@ -1151,7 +1292,8 @@ def main() -> None:
         log(f"  drew {counts['constellations']} constellations, "
             f"{counts['bright_stars']} named + {counts['bayer_stars']} bayer "
             f"stars, {counts['ngc']} NGC/IC"
-            + (f", {counts['hd']} HD" if args.hd else ""))
+            + (f", {counts['hd']} HD" if args.hd else "")
+            + (f", {counts['grid']} grid lines" if args.grid else ""))
         log(f"  wrote {ann_file}")
 
     summary = {

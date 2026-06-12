@@ -16,6 +16,7 @@ astrometry.net installation.
 ```
 ./psa.py image.fit            # solve + annotate
 ./psa.py image.jpg --hd       # also label Henry Draper stars
+./psa.py night/*.fit --timeout 300   # batch an imaging session
 ./psa.py --prefetch --hd      # warm the cache for offline use
 ./psa.py --check              # verify cached catalogs
 ```
@@ -116,6 +117,13 @@ Written to `"<name> Solved/"`:
   field size, matched index, annotation counts).
 - `<name>.new.fits` (with `--write-new`) — the input image with the WCS
   embedded, ready for DS9/Siril/Aladin (solve-field's `.new` equivalent).
+- `detections.png` (with `--plot-detections`) — extracted-star overlay,
+  written **before** solving so it survives failed solves; the extraction
+  diagnostic.
+
+Multiple images are processed in one invocation (`./psa.py night/*.fit`),
+each into its own output directory, with per-image failure isolation, a
+batch summary, and exit code 0 only if every image solved.
 
 ## Annotation layers
 
@@ -128,6 +136,8 @@ Written to `"<name> Solved/"`:
   named, Messier, or ≥ 5′ across
 - `--hd`: Henry Draper numbers (capped by `--hd-max`, nearest-to-detected
   stars preferred)
+- `--grid`: labeled RA/Dec coordinate grid, spacing chosen from the field
+  size, drawn beneath the other layers
 
 Label/line sizes scale with image resolution; override with `--font-size` /
 `--line-width`.
@@ -150,7 +160,9 @@ field can take many minutes blind — same as solve-field. Supply hints:
 
 `--no-auto-hint` disables metadata hints (true blind solve). For
 unattended runs, `--timeout SEC` enforces a hard deadline by running the
-engine in a worker process that is killed at the deadline.
+engine in a worker process that is killed at the deadline. When your
+optics' parity is known, `--parity neg` (most direct sky images) or
+`--parity pos` (mirrored optics) halves the blind-search work.
 
 ## Validation (2026-06-11)
 

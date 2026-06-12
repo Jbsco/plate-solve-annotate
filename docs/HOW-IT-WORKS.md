@@ -105,6 +105,7 @@ All of these invocations are equivalent — pick whichever fits the machine:
 
 ```console
 $ ./psa.py image.fit                    # shebang → uv resolves everything
+$ ./psa.py night/*.fit --timeout 300    # batch a session, per-image deadline
 $ uv run psa.py image.fit               # explicit uv
 $ pip install 'astrometry>=4.1.2,<5' astropy numpy sep pillow
 $ python psa.py image.fit               # plain venv fallback
@@ -282,7 +283,13 @@ Extraction is tunable from the command line when a frame misbehaves —
 
 ```console
 $ ./psa.py faint_field.fit --threshold 3.5 --objs 2000 --downsample 1
+$ ./psa.py field.jpg --plot-detections   # writes detections.png pre-solve
 ```
+
+`--plot-detections` renders exactly the diagnostic used throughout this
+section — the top-50 candidates in red, the rest in yellow — written
+*before* the solve is attempted, so a failed solve leaves its evidence
+behind.
 
 ![fixed extraction, night-mode frame](images/05-extract-fixed-pxl.jpg)
 
@@ -337,6 +344,18 @@ solution = solver.solve(
     ),
 )
 ```
+
+Two search-restriction notes. `--parity pos|neg|both` (solve-field's
+vocabulary, default both) tells the matcher which mirror-image sense to
+try, halving blind-search work when the optics are known — most direct sky
+images are `neg`. The restriction is real but soft: in testing, a
+wrong-parity-restricted search still occasionally solved a field through a
+*mirror-degenerate quad* (a 4-star pattern whose hash code nearly equals
+its mirror's), taking ~4× longer and matching at far weaker log-odds — the
+fitted WCS still comes out with the image's true parity, because the fit
+uses the actual star positions. And `--timeout SEC` runs the engine in a
+worker process killed at the deadline — the engine call itself is not
+interruptible, so a hard deadline requires process isolation.
 
 A complete real run, blind, on a 103-megapixel stack:
 
@@ -415,6 +434,12 @@ TAN model. Everything written to `"<name> Solved/"`:
   WCS embedded, solve-field's `.new` equivalent: FITS input keeps its
   original data and header with the WCS cards merged in; raster input is
   written as float32 grayscale.
+- **`detections.png`** (with `--plot-detections`) — the extraction
+  diagnostic of §5, written before solving.
+
+With multiple input images, each gets its own `"<name> Solved/"` directory
+(under `--out` if given); failures are isolated per image, a batch summary
+is printed, and the exit code is 0 only if every image solved.
 
 ```json
 {
@@ -458,7 +483,19 @@ $ ./psa.py stack.fit --hd --hd-max 300        # add HD numbers, capped
 $ ./psa.py wide.jpg --ngc-mag 13 --bright-mag 5   # deeper object/star cuts
 $ ./psa.py img.jpg --no-ngc --font-size 28 --line-width 4
 $ ./psa.py img.jpg --transparent              # overlay-only RGBA output
+$ ./psa.py img.jpg --grid                     # labeled RA/Dec graticule
 ```
+
+`--grid` adds a graticule beneath the other layers: declination parallels
+and right-ascension hour circles, sampled finely enough to curve with the
+projection, with spacing chosen from the solved field size (≈4–7 lines per
+axis) and in-line labels (`22h`, `+60°`).
+
+![coordinate grid on the wide field](images/12-annotation-grid-pxl.jpg)
+
+*`--grid` on the 54°×73° frame: declination parallels every 15° and hour
+circles every 2 h, bending with the projection. The spacing ladder lands on
+clean clock values — degrees for declination, hours and minutes for RA.*
 
 ![annotated Cassiopeia field](images/06-annotation-cassiopeia.jpg)
 
