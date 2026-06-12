@@ -1,10 +1,14 @@
 # plate-solve-annotate
 
+<img width="1023" height="184" alt="image" src="https://github.com/user-attachments/assets/78d612be-d423-42fa-862e-462050d1696e" />
+
 Self-contained, portable plate solving + sky annotation for astrophotography
 in a single Python file. Blind-solves an image against the astrometry.net
 index files, writes a standard WCS solution, and renders constellation
 figures, star names, NGC/IC/Messier objects, and optional Henry Draper
 labels over the image — with no system astrometry.net installation.
+
+<img width="1023" height="184" alt="annotations" src="https://github.com/user-attachments/assets/9dfa910f-980d-4fb9-8337-452058da9f69" />
 
 ```
 ./psa.py image.fit            # solve + annotate
