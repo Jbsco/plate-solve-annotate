@@ -26,41 +26,64 @@ automatically — nothing to install beyond uv itself. `uv run psa.py ...`
 works too, as does a plain venv with
 `pip install 'astrometry>=4.1.2,<5' astropy numpy sep pillow`.
 
-## Background: the pipeline this replaces
+## Background: the setup this replaces
 
-Local plate solving is conventionally assembled from a distribution package
-of [astrometry.net](http://astrometry.net) plus a small shell wrapper, along
-the lines of:
+This project supersedes a long-serving local pipeline: a shell alias
+wrapping a distribution package of
+[astrometry.net](http://astrometry.net) 0.97. The wrapper, essentially
+verbatim:
 
 ```bash
 #!/bin/bash
-# typical local plate-solve-and-annotate wrapper
+# predecessor: shell wrapper around the system astrometry.net install
 out="${1%.*} Solved"
 solve-field "$1" --downsample 2 --objs 1000 --tag-all -D "$out"
 plot-constellations -w "$out/$(basename "${1%.*}").wcs" -N -C -B \
     -D -d /usr/share/astrometry/data/hd.fits -o "$out/annotations.png"
+#   (the HD catalog arguments were appended only when an --hd flag was set)
 ```
 
-That setup works well — until the system around it moves. Failure modes
-observed in practice with exactly such a wrapper:
+The surrounding installation, specifically:
 
-- **Hidden interpreter coupling.** `solve-field` shells out to `image2pnm`,
-  a Python helper installed into a *versioned* site-packages directory. A
-  routine system Python upgrade (3.13 → 3.14) orphaned that module, and
-  every solve — including FITS input, which passes through the same
-  file-type sniffing — began failing with `ModuleNotFoundError`. The
-  compiled binaries were untouched and the package manager reported nothing
-  wrong, but the pipeline was dead until rebuilt against the new Python.
-- **Hand-maintained survey data.** Index files and `hd.fits` accumulate in
-  a system directory, fetched by ad-hoc `wget` scripts, with mixed
-  root/user file ownership and no record of which index scales were chosen
-  or why. Reproducing the setup on a second machine is archaeology, and
-  nothing updates or validates the data afterwards.
-- **A wide native dependency surface.** cfitsio, wcslib, GSL, cairo,
-  netpbm, libcurl — a chain of C libraries that must stay in step with the
-  OS, and a rebuild burden whenever one of them bumps.
+- **Engine config** in `/etc/astrometry.cfg`: `cpulimit 600` (a CPU budget
+  per field), `add_path` entries for `/usr/share/astrometry/data/41XX` and
+  `42XX`, and `autoindex`.
+- **Index data** hand-fetched by `wget` scripts into that system directory:
+  series 4100 scales 4111–4119 (Tycho-2, ~21 MB) and series 4200 scales
+  4211–4219 (2MASS, ~17 MB) — wide-field skymarks only, quads ≈ 85′–2000′ —
+  plus the 4.5 MB `hd.fits`, with mixed root/user file ownership and the
+  scale choices recorded nowhere but the scripts themselves.
+- **Invocation always fully blind.** The wrapper hard-coded
+  `--downsample 2 --objs 1000 --tag-all` and exposed no pathway to
+  solve-field's own hinting options (`--scale-low/--scale-high`,
+  `--ra/--dec/--radius`), so every solve searched the entire scale ladder
+  and the whole sky regardless of what was known about the image.
 
-This script keeps the proven solver core and replaces everything around it:
+What that specific arrangement meant in practice, measured on real frames:
+
+- On well-sampled ~10° DSLR fields it worked reliably — the engine plus
+  Tycho-2/2MASS indexes are excellent in that regime.
+- On very wide (50°+) phone frames, always-blind invocation made success
+  marginal: on one 73° frame with heavy foreground occlusion, the identical
+  pixels ran ~29 minutes of CPU before stopping at
+  `Total CPU time limit reached` without a solution. **That is not an
+  engine deficiency** — given a two-flag scale hint, the same engine solves
+  that frame (and with intact EXIF metadata, this project derives such
+  hints automatically; the same frame class solves in seconds).
+- A routine system Python upgrade (3.13 → 3.14) orphaned `image2pnm`, the
+  interpreter-coupled helper `solve-field` invokes for input conversion and
+  file-type sniffing. Every solve — *including FITS input* — began failing
+  with `ModuleNotFoundError`, while the compiled binaries were untouched
+  and the package manager reported nothing wrong.
+- Reproducing the data directory on a second machine was archaeology, and
+  nothing validated or updated it afterwards.
+
+None of this reflects on astrometry.net itself: the solver, the index
+files, and even the Henry Draper kd-tree carry over into this project
+unchanged. What changed is the packaging and the invocation around them —
+hint plumbing surfaced (and automated from image metadata), index scales
+chosen and recorded programmatically, and the interpreter coupling and
+native-library chain removed:
 
 | system-install pipeline | this script |
 |---|---|

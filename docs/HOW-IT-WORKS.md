@@ -40,6 +40,12 @@ for the full account):
   scales were chosen or why, and nothing validating them afterwards.
 - **A wide native dependency surface.** cfitsio, wcslib, GSL, cairo,
   netpbm, libcurl — all of which must stay in step with the OS.
+- **Always-blind invocation.** A fixed wrapper command line
+  (`--downsample 2 --objs 1000`) with no plumbing for solve-field's own
+  scale/position hints, so every solve searched the full scale ladder and
+  the whole sky — which is what made very wide frames marginal under the
+  engine's CPU budget (§10). The engine was never the limitation; the
+  invocation was.
 
 `psa.py` keeps the proven part — the astrometry.net solving engine itself —
 and replaces everything around it with Python libraries that install from
