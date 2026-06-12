@@ -3,10 +3,13 @@
 <img width="1023" height="184" alt="image" src="https://github.com/user-attachments/assets/78d612be-d423-42fa-862e-462050d1696e" />
 
 Self-contained, portable plate solving + sky annotation for astrophotography
-in a single Python file. Blind-solves an image against the astrometry.net
-index files, writes a standard WCS solution, and renders constellation
-figures, star names, NGC/IC/Messier objects, and optional Henry Draper
-labels over the image — with no system astrometry.net installation.
+in a single Python file, built on the
+[astrometry.net](http://astrometry.net) solving engine
+([Lang et al. 2010](https://arxiv.org/abs/0910.2233)). Blind-solves an
+image against the astrometry.net index files, writes a standard WCS
+solution, and renders constellation figures, star names, NGC/IC/Messier
+objects, and optional Henry Draper labels over the image — with no system
+astrometry.net installation.
 
 <img width="1023" height="184" alt="annotations" src="https://github.com/user-attachments/assets/9dfa910f-980d-4fb9-8337-452058da9f69" />
 
@@ -159,6 +162,66 @@ star-extraction failure modes — with annotated examples from
 ```bash
 alias psa='/path/to/plate-solve-annotate/psa.py'
 ```
+
+## Acknowledgements & references
+
+This tool is an orchestration layer; the heavy lifting is done by
+astrometry.net and the open catalogs it draws on.
+
+- **[astrometry.net](http://astrometry.net)** — Dustin Lang, David W. Hogg,
+  Keir Mierle, Michael Blanton & Sam Roweis. The blind solver at the heart
+  of this script, the [index files](https://data.astrometry.net), and the
+  Henry Draper kd-tree all come from this project, which also operates the
+  free hosted solver at [nova.astrometry.net](https://nova.astrometry.net).
+  If results from this tool contribute to academic work, please cite:
+
+  > Lang, D., Hogg, D. W., Mierle, K., Blanton, M., & Roweis, S. 2010,
+  > *Astrometry.net: Blind astrometric calibration of arbitrary
+  > astronomical images*, AJ 139, 1782 —
+  > [doi:10.1088/0004-6256/139/5/1782](https://doi.org/10.1088/0004-6256/139/5/1782)
+  > · [arXiv:0910.2233](https://arxiv.org/abs/0910.2233)
+
+  <details><summary>BibTeX</summary>
+
+  ```bibtex
+  @article{Lang2010Astrometry,
+    author  = {Lang, Dustin and Hogg, David W. and Mierle, Keir and
+               Blanton, Michael and Roweis, Sam},
+    title   = {Astrometry.net: Blind Astrometric Calibration of
+               Arbitrary Astronomical Images},
+    journal = {The Astronomical Journal},
+    volume  = {139},
+    number  = {5},
+    pages   = {1782--1800},
+    year    = {2010},
+    doi     = {10.1088/0004-6256/139/5/1782},
+    eprint  = {0910.2233},
+    archivePrefix = {arXiv}
+  }
+  ```
+  </details>
+
+- **[`astrometry` wheel](https://github.com/neuromorphicsystems/astrometry)**
+  (International Centre for Neuromorphic Systems, Western Sydney
+  University) — packages the astrometry.net engine for pip and provides
+  programmatic index downloads, which is what makes a self-bootstrapping
+  single-file tool possible.
+- **[SEP](https://sep.readthedocs.io)** (Kyle Barbary,
+  [JOSS 1(6), 58](https://doi.org/10.21105/joss.00058)) — Source Extractor
+  as a library, after **SExtractor** (Bertin & Arnouts,
+  [A&AS 117, 393](https://ui.adsabs.harvard.edu/abs/1996A%26AS..117..393B)).
+- **[Astropy](https://www.astropy.org)** — FITS I/O and all WCS/SIP
+  mathematics ([citation info](https://www.astropy.org/acknowledging.html)).
+- **Catalog data** — [d3-celestial](https://github.com/ofrohn/d3-celestial)
+  (Olaf Frohn): constellation figures and star designations;
+  [IAU Working Group on Star Names](https://www.iau.org/science/scientific_bodies/working_groups/280/):
+  official star names; [OpenNGC](https://github.com/mattiaverga/OpenNGC)
+  (Mattia Verga): NGC/IC/Messier objects; index files built from
+  **Tycho-2** ([Høg et al. 2000](https://ui.adsabs.harvard.edu/abs/2000A%26A...355L..27H))
+  and **2MASS** ([Skrutskie et al. 2006](https://ui.adsabs.harvard.edu/abs/2006AJ....131.1163S)).
+
+Per-stage algorithm references live in
+[docs/HOW-IT-WORKS.md](docs/HOW-IT-WORKS.md#12-references).
 
 ## License
 
