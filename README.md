@@ -1,4 +1,4 @@
-# psa-port
+# plate-solve-annotate
 
 Self-contained, portable plate solving + sky annotation for astrophotography
 in a single Python file. Blind-solves an image against the astrometry.net
@@ -153,5 +153,12 @@ star-extraction failure modes — with annotated examples from
 ## Suggested alias
 
 ```bash
-alias psa='/path/to/psa-port/psa.py'
+alias psa='/path/to/plate-solve-annotate/psa.py'
 ```
+
+## License
+
+[MIT](LICENSE.md). Runtime dependencies and runtime-downloaded data are not
+vendored here and carry their own licenses — including the **GPL-3.0**
+solver wheel, which matters if you redistribute bundled artifacts. See
+[NOTICE.md](NOTICE.md) for the full chain and data attributions.
